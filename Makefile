@@ -1,6 +1,6 @@
 CC=gcc
-SRC=proxy.c
-OBJ=proxy
+SRC=server.c
+OBJ=server
 
 all: $(OBJ)
 
