@@ -8,6 +8,7 @@
 #include <getopt.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 /**
  * Project 1 starter code
@@ -123,6 +124,35 @@ void parse_args(int argc, char *argv[], struct server_app *app)
     }
 }
 
+
+int hex_to_dec(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    return 0;
+}
+
+// Function to perform URL decoding
+void url_decode(char *dest, const char *src) {
+    char *d = dest;
+    while (*src) {
+        if (*src == '%' && src[1] == '2' && src[2] == '0') {
+            *d++ = hex_to_dec(src[1]) * 16 + hex_to_dec(src[2]);
+            src += 3;
+        } else {
+            *d++ = *src++;
+        }
+    }
+    *d = '\0';
+}
+
+
 void handle_request(struct server_app *app, int client_socket) {
     char buffer[BUFFER_SIZE];
     ssize_t bytes_read;
@@ -144,7 +174,18 @@ void handle_request(struct server_app *app, int client_socket) {
 
     // TODO: Parse the header and extract essential fields, e.g. file name
     // Hint: if the requested path is "/" (root), default to index.html
-    char file_name[] = "index.html";
+
+    // get the first line of http request
+    char *first_line = strtok(request, "\r\n");
+    char *method = strtok(first_line, " ");
+    char *path = strtok(NULL, " ");
+
+    char decoded_path[1024];
+    url_decode(decoded_path, path);
+    char *file_name = "index.html";
+    if (strcmp(path, "/") != 0){
+        file_name = decoded_path;
+    }
 
     // TODO: Implement proxy and call the function under condition
     // specified in the spec
@@ -167,13 +208,51 @@ void serve_local_file(int client_socket, const char *path) {
     // (When the requested file does not exist):
     // * Generate a correct response
 
-    char response[] = "HTTP/1.0 200 OK\r\n"
-                      "Content-Type: text/plain; charset=UTF-8\r\n"
-                      "Content-Length: 15\r\n"
-                      "\r\n"
-                      "Sample response";
+//    char response[] = "HTTP/1.0 200 OK\r\n"
+//                      "Content-Type: text/plain; charset=UTF-8\r\n"
+//                      "Content-Length: 15\r\n"
+//                      "\r\n"
+//                      "Sample response";
+    FILE *file = fopen(path, "r");
 
-    send(client_socket, response, strlen(response), 0);
+    if(file == NULL){
+        const char *not_found_response = "HTTP/1.0 404 Not Found\r\n"
+                                         "Content-Type: text/plain; charset=UTF-8\r\n"
+                                         "Content-Length: 13\r\n"
+                                         "\r\n"
+                                         "404 Not Found";
+        send(client_socket, not_found_response, strlen(not_found_response), 0);
+        return;
+    }
+
+    // get Content-Type
+    char *content_type;
+    if (strstr(path, ".html") || strstr(path, ".txt")){
+        content_type = "text/plain; charset=UTF-8";
+    } else if (strstr(path, ".jpg")){
+        content_type = "image/jpeg";
+    } else{
+        content_type = "application/octet-stream";
+    }
+
+    //Extract file size and content from file
+    struct stat st;
+    stat(path, &st);
+    char *file_content = malloc(st.st_size);
+    fread(file_content, 1, st.st_size, file);
+
+    //Generate and send Header
+    char header[512];
+    sprintf(header, "HTTP/1.0 200 OK\r\n"
+                    "Content-Type: %s\r\n"
+                    "Content-Length: %lld\r\n"
+                    "\r\n", content_type, st.st_size);
+    send(client_socket, header, strlen(header), 0);
+
+    //send file content
+    send(client_socket, file_content, st.st_size, 0);
+    fclose(file);
+    free(file_content);
 }
 
 void proxy_remote_file(struct server_app *app, int client_socket, const char *request) {
