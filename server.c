@@ -285,7 +285,7 @@ void proxy_remote_file(struct server_app *app, int client_socket, const char *re
     remoteServer_addr.sin_addr.s_addr = inet_addr("127.0.0.1");; 
   
     int connectStatus = connect(remote_socket, (struct sockaddr*)&remoteServer_addr, sizeof(remoteServer_addr)); 
-  
+    
     if (connectStatus == -1) { 
         printf("Error...\n"); 
     }
@@ -297,19 +297,33 @@ void proxy_remote_file(struct server_app *app, int client_socket, const char *re
 
         char remote_buffer[BUFFER_SIZE];
         ssize_t remote_read = recv(remote_socket, remote_buffer, sizeof(remote_buffer) - 1, 0);
-        
-        if (remote_read < 0){
-            char response[] = "HTTP/1.0 501 Not Implemented\r\n\r\n";
-            send(client_socket, response, strlen(response), 0);
-            return;
-        }
-
-        remote_buffer[remote_read] = '\0';
         printf("%s\n", remote_buffer);
-
-        // Send data back to the client(browser)
         if (send(client_socket, remote_buffer, strlen(remote_buffer), 0) == -1){
             perror("send to remote server failed");
         }
+        int i=0;
+        while(remote_read > 0){
+            remote_read = recv(remote_socket, remote_buffer, sizeof(remote_buffer) - 1, 0);
+            if (remote_read < 0){
+                // char response[] = "HTTP/1.0 501 Not Implemented\r\n\r\n";
+                // send(client_socket, response, strlen(response), 0);
+                return;
+            }
+            // Send data back to the client(browser)
+            if (send(client_socket, remote_buffer, strlen(remote_buffer), 0) == -1){
+                perror("send to remote server failed");
+            }
+            // remote_buffer[remote_read] = '\0';
+            // if (remote_read != 1024){
+            //     printf("Receiving %ld bytes:\n", remote_read);
+            // }
+            i++;
+        }
+        printf("i=%d\n\n\n", i);
+
+        
     }
+
+    // char response[] = "HTTP/1.0 501 Not Implemented\r\n\r\n";
+    //             send(client_socket, response, strlen(response), 0);
 }
