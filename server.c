@@ -152,6 +152,12 @@ void url_decode(char *dest, const char *src) {
     *d = '\0';
 }
 
+int need_proxy(const char *file_name){
+    int len = strlen(file_name);
+    const char *file_extension = &file_name[len-3];
+    return strcmp(file_extension, ".ts");
+}
+
 
 void handle_request(struct server_app *app, int client_socket) {
     char buffer[BUFFER_SIZE];
@@ -170,11 +176,13 @@ void handle_request(struct server_app *app, int client_socket) {
     buffer[bytes_read] = '\0';
     // copy buffer to a new string
     char *request = malloc(strlen(buffer) + 1);
+    char *request_copy = malloc(strlen(buffer) + 1);
     strcpy(request, buffer);
+    strcpy(request_copy, buffer);
 
     // TODO: Parse the header and extract essential fields, e.g. file name
     // Hint: if the requested path is "/" (root), default to index.html
-
+    
     // get the first line of http request
     char *first_line = strtok(request, "\r\n");
     char *method = strtok(first_line, " ");
@@ -189,11 +197,11 @@ void handle_request(struct server_app *app, int client_socket) {
 
     // TODO: Implement proxy and call the function under condition
     // specified in the spec
-    // if (need_proxy(...)) {
-    //    proxy_remote_file(app, client_socket, file_name);
-    // } else {
-    serve_local_file(client_socket, file_name);
-    //}
+    if (need_proxy(file_name) == 0) {
+        proxy_remote_file(app, client_socket, request_copy);
+    } else {
+        serve_local_file(client_socket, file_name);
+    }
 }
 
 void serve_local_file(int client_socket, const char *path) {
@@ -213,6 +221,9 @@ void serve_local_file(int client_socket, const char *path) {
 //                      "Content-Length: 15\r\n"
 //                      "\r\n"
 //                      "Sample response";
+    
+    if (path[0] == '/') path++;  // on linux file system
+
     FILE *file = fopen(path, "r");
 
     if(file == NULL){
@@ -228,7 +239,7 @@ void serve_local_file(int client_socket, const char *path) {
     // get Content-Type
     char *content_type;
     if (strstr(path, ".html") || strstr(path, ".txt")){
-        content_type = "text/plain; charset=UTF-8";
+        content_type = "text/html; charset=UTF-8";
     } else if (strstr(path, ".jpg")){
         content_type = "image/jpeg";
     } else{
@@ -245,7 +256,7 @@ void serve_local_file(int client_socket, const char *path) {
     char header[512];
     sprintf(header, "HTTP/1.0 200 OK\r\n"
                     "Content-Type: %s\r\n"
-                    "Content-Length: %lld\r\n"
+                    "Content-Length: %ld\r\n"
                     "\r\n", content_type, st.st_size);
     send(client_socket, header, strlen(header), 0);
 
@@ -264,7 +275,41 @@ void proxy_remote_file(struct server_app *app, int client_socket, const char *re
     // Bonus:
     // * When connection to the remote server fail, properly generate
     // HTTP 502 "Bad Gateway" response
+    
+    int remote_socket = socket(AF_INET, SOCK_STREAM, 0); 
+  
+    struct sockaddr_in remoteServer_addr; 
+  
+    remoteServer_addr.sin_family = AF_INET; 
+    remoteServer_addr.sin_port = htons(app->remote_port);
+    remoteServer_addr.sin_addr.s_addr = inet_addr("127.0.0.1");; 
+  
+    int connectStatus = connect(remote_socket, (struct sockaddr*)&remoteServer_addr, sizeof(remoteServer_addr)); 
+  
+    if (connectStatus == -1) { 
+        printf("Error...\n"); 
+    }
+    else {
 
-    char response[] = "HTTP/1.0 501 Not Implemented\r\n\r\n";
-    send(client_socket, response, strlen(response), 0);
+        if (send(remote_socket, request, strlen(request), 0) == -1){
+            perror("send to remote server failed");
+        }
+
+        char remote_buffer[BUFFER_SIZE];
+        ssize_t remote_read = recv(remote_socket, remote_buffer, sizeof(remote_buffer) - 1, 0);
+        
+        if (remote_read < 0){
+            char response[] = "HTTP/1.0 501 Not Implemented\r\n\r\n";
+            send(client_socket, response, strlen(response), 0);
+            return;
+        }
+
+        remote_buffer[remote_read] = '\0';
+        printf("%s\n", remote_buffer);
+
+        // Send data back to the client(browser)
+        if (send(client_socket, remote_buffer, strlen(remote_buffer), 0) == -1){
+            perror("send to remote server failed");
+        }
+    }
 }
