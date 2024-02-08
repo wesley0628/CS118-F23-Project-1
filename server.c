@@ -16,6 +16,7 @@
  */
 
 #define BUFFER_SIZE 1024
+#define REMOTE_BUFFER_SIZE 65536
 #define DEFAULT_SERVER_PORT 8081
 #define DEFAULT_REMOTE_HOST "131.179.176.34"
 #define DEFAULT_REMOTE_PORT 5001
@@ -38,6 +39,12 @@ void parse_args(int argc, char *argv[], struct server_app *app);
 void handle_request(struct server_app *app, int client_socket);
 void serve_local_file(int client_socket, const char *path);
 void proxy_remote_file(struct server_app *app, int client_socket, const char *path);
+
+// Helper functions
+int hex_to_dec(char c);
+void url_decode(char *dest, const char *src);
+int need_proxy(const char *file_name);
+static void server_failure_response(int client_socket);
 
 // The main function is provided and no change is needed
 int main(int argc, char *argv[])
@@ -124,41 +131,6 @@ void parse_args(int argc, char *argv[], struct server_app *app)
     }
 }
 
-
-int hex_to_dec(char c) {
-    if (c >= '0' && c <= '9') {
-        return c - '0';
-    }
-    if (c >= 'A' && c <= 'F') {
-        return c - 'A' + 10;
-    }
-    if (c >= 'a' && c <= 'f') {
-        return c - 'a' + 10;
-    }
-    return 0;
-}
-
-// Function to perform URL decoding
-void url_decode(char *dest, const char *src) {
-    char *d = dest;
-    while (*src) {
-        if (*src == '%' && src[1] == '2' && src[2] == '0') {
-            *d++ = hex_to_dec(src[1]) * 16 + hex_to_dec(src[2]);
-            src += 3;
-        } else {
-            *d++ = *src++;
-        }
-    }
-    *d = '\0';
-}
-
-int need_proxy(const char *file_name){
-    int len = strlen(file_name);
-    const char *file_extension = &file_name[len-3];
-    return strcmp(file_extension, ".ts");
-}
-
-
 void handle_request(struct server_app *app, int client_socket) {
     char buffer[BUFFER_SIZE];
     ssize_t bytes_read;
@@ -240,7 +212,9 @@ void serve_local_file(int client_socket, const char *path) {
     char *content_type;
     if (strstr(path, ".html") || strstr(path, ".txt")){
         content_type = "text/html; charset=UTF-8";
-    } else if (strstr(path, ".jpg")){
+    } else if (strstr(path, ".txt")){
+        content_type = "text/plain";
+    }else if (strstr(path, ".jpg")){
         content_type = "image/jpeg";
     } else{
         content_type = "application/octet-stream";
@@ -282,48 +256,82 @@ void proxy_remote_file(struct server_app *app, int client_socket, const char *re
   
     remoteServer_addr.sin_family = AF_INET; 
     remoteServer_addr.sin_port = htons(app->remote_port);
-    remoteServer_addr.sin_addr.s_addr = inet_addr("127.0.0.1");; 
+    remoteServer_addr.sin_addr.s_addr = inet_addr(app->remote_host);; 
   
-    int connectStatus = connect(remote_socket, (struct sockaddr*)&remoteServer_addr, sizeof(remoteServer_addr)); 
+    if (connect(remote_socket, 
+                (struct sockaddr*)&remoteServer_addr, 
+                sizeof(remoteServer_addr)) != 0){
+        perror("Error connecting to the proxy..\n");
+        close(remote_socket);
+        server_failure_response(client_socket);
+        return;
+    }  
+
+    // Forward request to the video server
+    if (send(remote_socket, request, strlen(request), 0) == -1){
+        perror("send to remote server failed");
+        server_failure_response(client_socket);
+    }
+
+    char remote_buffer[REMOTE_BUFFER_SIZE];
     
-    if (connectStatus == -1) { 
-        printf("Error...\n"); 
-    }
-    else {
-
-        if (send(remote_socket, request, strlen(request), 0) == -1){
-            perror("send to remote server failed");
+    while (1){
+        ssize_t remote_bytes_received = recv(remote_socket, remote_buffer, sizeof(remote_buffer), 0);
+        if (remote_bytes_received == -1){
+            perror("recv() from video server failed\n");
+            server_failure_response(client_socket);
+            break;
         }
-
-        char remote_buffer[BUFFER_SIZE];
-        ssize_t remote_read = recv(remote_socket, remote_buffer, sizeof(remote_buffer) - 1, 0);
-        printf("%s\n", remote_buffer);
-        if (send(client_socket, remote_buffer, strlen(remote_buffer), 0) == -1){
-            perror("send to remote server failed");
+        if (remote_bytes_received == 0){
+            break;
         }
-        int i=0;
-        while(remote_read > 0){
-            remote_read = recv(remote_socket, remote_buffer, sizeof(remote_buffer) - 1, 0);
-            if (remote_read < 0){
-                // char response[] = "HTTP/1.0 501 Not Implemented\r\n\r\n";
-                // send(client_socket, response, strlen(response), 0);
-                return;
-            }
-            // Send data back to the client(browser)
-            if (send(client_socket, remote_buffer, strlen(remote_buffer), 0) == -1){
-                perror("send to remote server failed");
-            }
-            // remote_buffer[remote_read] = '\0';
-            // if (remote_read != 1024){
-            //     printf("Receiving %ld bytes:\n", remote_read);
-            // }
-            i++;
-        }
-        printf("i=%d\n\n\n", i);
-
         
+        // Forward response to my client (browser)
+        if (send(client_socket, remote_buffer, remote_bytes_received, 0) == -1){
+            perror("write failed");
+            break;
+        }
     }
 
-    // char response[] = "HTTP/1.0 501 Not Implemented\r\n\r\n";
-    //             send(client_socket, response, strlen(response), 0);
+    close(remote_socket);    
+}
+
+int hex_to_dec(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    return 0;
+}
+
+// Function to perform URL decoding
+void url_decode(char *dest, const char *src) {
+    char *d = dest;
+    while (*src) {
+        if (*src == '%' && src[1] == '2' && src[2] == '0') {
+            *d++ = hex_to_dec(src[1]) * 16 + hex_to_dec(src[2]);
+            src += 3;
+        } else {
+            *d++ = *src++;
+        }
+    }
+    *d = '\0';
+}
+
+int need_proxy(const char *file_name){
+    int len = strlen(file_name);
+    const char *file_extension = &file_name[len-3];
+    return strcmp(file_extension, ".ts");
+}
+
+static void server_failure_response(int client_socket){
+    char response[] = "HTTP/1.0 502 Bad Gateway\r\n\r\n";
+    if (send(client_socket, response, strlen(response), 0) == -1){
+        perror("send in server_failure_response() failed");
+    }
 }
