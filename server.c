@@ -210,7 +210,7 @@ void serve_local_file(int client_socket, const char *path) {
 
     // get Content-Type
     char *content_type;
-    if (strstr(path, ".html") || strstr(path, ".txt")){
+    if (strstr(path, ".html") || strstr(path, ".mime")){
         content_type = "text/html; charset=UTF-8";
     } else if (strstr(path, ".txt")){
         content_type = "text/plain";
