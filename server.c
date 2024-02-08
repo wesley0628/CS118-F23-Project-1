@@ -230,7 +230,7 @@ void serve_local_file(int client_socket, const char *path) {
     char header[512];
     sprintf(header, "HTTP/1.0 200 OK\r\n"
                     "Content-Type: %s\r\n"
-                    "Content-Length: %ld\r\n"
+                    "Content-Length: %lld\r\n"
                     "\r\n", content_type, st.st_size);
     send(client_socket, header, strlen(header), 0);
 
@@ -313,10 +313,11 @@ int hex_to_dec(char c) {
 void url_decode(char *dest, const char *src) {
     char *d = dest;
     while (*src) {
-        if (*src == '%' && src[1] == '2' && src[2] == '0') {
+        if ((*src == '%' && src[1] == '2' && src[2] == '0') || (*src == '%' && src[1] == '2' && src[2] == '5')) {
             *d++ = hex_to_dec(src[1]) * 16 + hex_to_dec(src[2]);
             src += 3;
-        } else {
+        }
+        else {
             *d++ = *src++;
         }
     }
